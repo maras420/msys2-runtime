@@ -1905,6 +1905,8 @@ class fhandler_termios: public fhandler_base
   tty_min *_tc;
   tty *get_ttyp () {return (tty *) tc ();}
   int eat_readahead (int n);
+  virtual void acquire_input_mutex_if_necessary (DWORD ms) {};
+  virtual void release_input_mutex_if_necessary (void) {};
 
  public:
   tty_min*& tc () {return _tc;}
@@ -2212,6 +2214,14 @@ private:
   void __release_input_mutex (const char *fn, int ln);
   DWORD __acquire_output_mutex (const char *fn, int ln, DWORD ms);
   void __release_output_mutex (const char *fn, int ln);
+  void acquire_input_mutex_if_necessary (DWORD ms)
+  {
+    acquire_input_mutex (ms);
+  }
+  void release_input_mutex_if_necessary (void)
+  {
+    release_input_mutex ();
+  }
 
   char *&rabuf ();
   size_t &ralen ();
@@ -2273,6 +2283,9 @@ class fhandler_pty_common: public fhandler_termios
   }
 
   void resize_pseudo_console (struct winsize *);
+  static DWORD get_console_process_id (DWORD pid, bool match,
+				       bool cygwin = false,
+				       bool stub_only = false);
 
  protected:
   static BOOL process_opost_output (HANDLE h, const void *ptr, ssize_t& len,
@@ -2284,6 +2297,8 @@ class fhandler_pty_slave: public fhandler_pty_common
 {
   HANDLE inuse;			// used to indicate that a tty is in use
   HANDLE output_handle_cyg, io_handle_cyg;
+  HANDLE slave_reading;
+  LONG num_reader;
 
   /* Helper functions for fchmod and fchown. */
   bool fch_open_handles (bool chown);
@@ -2291,6 +2306,13 @@ class fhandler_pty_slave: public fhandler_pty_common
   void fch_close_handles ();
 
  public:
+  /* Transfer direction for transfer_input() */
+  enum xfer_dir
+  {
+    to_nat,
+    to_cyg
+  };
+
   /* Constructor */
   fhandler_pty_slave (int);
 
@@ -2340,15 +2362,19 @@ class fhandler_pty_slave: public fhandler_pty_common
     copyto (fh);
     return fh;
   }
-  bool setup_pseudoconsole (STARTUPINFOEXW *si, bool nopcon);
+  bool setup_pseudoconsole (bool nopcon);
   static void close_pseudoconsole (tty *ttyp);
   bool term_has_pcon_cap (const WCHAR *env);
   void set_switch_to_pcon (void);
   void reset_switch_to_pcon (void);
-  void mask_switch_to_pcon_in (bool mask);
+  void mask_switch_to_pcon_in (bool mask, bool xfer);
   void setup_locale (void);
   tty *get_ttyp () { return (tty *) tc (); } /* Override as public */
   void create_invisible_console (void);
+  static void transfer_input (xfer_dir dir, HANDLE from, tty *ttyp,
+			      _minor_t unit, HANDLE input_available_event);
+  HANDLE get_input_available_event (void) { return input_available_event; }
+  bool pcon_activated (void) { return get_ttyp ()->pcon_activated; }
 };
 
 #define __ptsname(buf, unit) __small_sprintf ((buf), "/dev/pty%d", (unit))
@@ -2361,6 +2387,8 @@ public:
     HANDLE from_master_cyg;
     HANDLE to_master;
     HANDLE to_master_cyg;
+    HANDLE to_slave;
+    HANDLE to_slave_cyg;
     HANDLE master_ctl;
     HANDLE input_available_event;
   };

@@ -143,7 +143,7 @@ extern "C" int
 dup2 (int oldfd, int newfd)
 {
   int res;
-  if (newfd >= OPEN_MAX_MAX || newfd < 0)
+  if (newfd >= OPEN_MAX || newfd < 0)
     {
       set_errno (EBADF);
       res = -1;
@@ -164,7 +164,7 @@ extern "C" int
 dup3 (int oldfd, int newfd, int flags)
 {
   int res;
-  if (newfd >= OPEN_MAX_MAX)
+  if (newfd >= OPEN_MAX)
     {
       set_errno (EBADF);
       res = -1;
@@ -2878,7 +2878,7 @@ setdtablesize (int size)
     }
 
   if (size <= (int) cygheap->fdtab.size
-      || cygheap->fdtab.extend (size - cygheap->fdtab.size, OPEN_MAX_MAX))
+      || cygheap->fdtab.extend (size - cygheap->fdtab.size, OPEN_MAX))
     return 0;
 
   return -1;
@@ -2887,7 +2887,7 @@ setdtablesize (int size)
 extern "C" int
 getdtablesize ()
 {
-  return cygheap->fdtab.size;
+  return OPEN_MAX;
 }
 
 extern "C" int
@@ -4787,17 +4787,27 @@ fchmodat (int dirfd, const char *pathname, mode_t mode, int flags)
   tmp_pathbuf tp;
   __try
     {
-      if (flags)
+      if (flags & ~AT_SYMLINK_NOFOLLOW)
 	{
-	  /* BSD has lchmod, but Linux does not.  POSIX says
-	     AT_SYMLINK_NOFOLLOW is allowed to fail on symlinks; but Linux
-	     blindly fails even for non-symlinks.  */
-	  set_errno ((flags & ~AT_SYMLINK_NOFOLLOW) ? EINVAL : EOPNOTSUPP);
+	  set_errno (EINVAL);
 	  __leave;
 	}
       char *path = tp.c_get ();
       if (gen_full_path_at (path, dirfd, pathname))
 	__leave;
+      if (flags & AT_SYMLINK_NOFOLLOW)
+	{
+          /* BSD has lchmod, but Linux does not.  POSIX says
+	     AT_SYMLINK_NOFOLLOW is allowed to fail on symlinks.
+	     Linux blindly fails even for non-symlinks, but we allow
+	     it to succeed. */
+	  path_conv pc (path, PC_SYM_NOFOLLOW, stat_suffixes);
+	  if (pc.issymlink ())
+	    {
+	      set_errno (EOPNOTSUPP);
+	      __leave;
+	    }
+	}
       return chmod (path, mode);
     }
   __except (EFAULT) {}
@@ -4915,7 +4925,7 @@ utimensat (int dirfd, const char *pathname, const struct timespec *times,
 }
 
 extern "C" int
-futimesat (int dirfd, const char *pathname, const struct timeval *times)
+futimesat (int dirfd, const char *pathname, const struct timeval times[2])
 {
   tmp_pathbuf tp;
   __try
